@@ -88,5 +88,19 @@ class VMTests(unittest.TestCase):
         self.assertIn('truncated', report.text)
 
 
+
+class InterpreterSignatureTests(unittest.TestCase):
+    def test_whitespace_and_comments_preserve_signature_but_changes_do_not(self):
+        from vendor.unprom.lexer import tokenize
+        from vm_inspector import matches_interpreter
+        import hashlib
+        header = 'local a=1; local b="--literal";'
+        tokens = tuple((t.type, t.raw if t.raw is not None else t.value) for t in tokenize(header))
+        signature = hashlib.sha256(repr(tokens).encode()).hexdigest()
+        with patch('vm_inspector._INTERPRETER_TOKENS_HASH', signature):
+            self.assertTrue(matches_interpreter('local a = 1; --comment\nlocal b = "--literal";'))
+            self.assertFalse(matches_interpreter(header.replace('a=1', 'a=2')))
+            self.assertFalse(matches_interpreter('x' * 64001))
+
 if __name__ == '__main__':
     unittest.main()

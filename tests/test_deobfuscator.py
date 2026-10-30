@@ -1,6 +1,6 @@
 import unittest
 
-from deobfuscator import MAX_BYTES, MAX_INPUT_BYTES, deobfuscate, remote_url
+from deobfuscator import MAX_BYTES, MAX_INPUT_BYTES, MAX_LAYERS, deobfuscate, remote_url
 
 
 class DecoderTests(unittest.TestCase):
@@ -78,6 +78,28 @@ class DecoderTests(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertEqual(deobfuscate(source).layers, 0)
 
+    def test_literal_unpack_and_local_url(self):
+        self.assertEqual(deobfuscate('loadstring(string.char(table.unpack({112;114;105;110;116;40;49;41;})))()').source, 'print(1)')
+        self.assertEqual(deobfuscate('loadstring(table.concat({"print";"(1)"}))()').source, 'print(1)')
+        url = 'https://raw.githubusercontent.com/a/b/main/file.lua'
+        self.assertEqual(remote_url('local url="' + url + '";loadstring(game:HttpGet(url))()'), url)
+        self.assertIsNone(remote_url('local game="other";loadstring(game:HttpGet("' + url + '"))()'))
+
+    def test_comments_substrings_and_byte_arithmetic(self):
+        cases = [
+            ('-- comment\nloadstring("print(1)")() -- trailing', 'print(1)'),
+            ('--[=[long\ncomment]=]loadstring(string.sub("xxprint(1)yy",3,-3))()', 'print(1)'),
+            ('loadstring(string.char(100+12,120-6,105,110,116,40,49,41))()', 'print(1)'),
+            ('loadstring(string.sub("abcdef", -3))()', 'def'),
+            ('loadstring(string.sub("abcdef", 5, 2))()', ''),
+            ('loadstring("a\\z  --b")()', 'a--b'),
+        ]
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual(deobfuscate(source).source, expected)
+        self.assertEqual(deobfuscate('loadstring(string.char(120-5-3))()').source, 'p')
+        self.assertEqual(deobfuscate('loadstring("x") --[[unterminated').layers, 0)
+
     def test_remote_wrapper_parser(self):
         url = 'https://raw.githubusercontent.com/owner/repo/main/test.lua'
         self.assertEqual(remote_url(url), url)
@@ -94,11 +116,11 @@ class DecoderTests(unittest.TestCase):
         self.assertEqual(deobfuscate(source).layers, 2)
         # Long-bracket delimiters allow straightforward nesting.
         nested = 'print(1)'
-        for i in range(9):
+        for i in range(MAX_LAYERS + 1):
             eq = '=' * i
             nested = f'loadstring([{eq}[{nested}]{eq}])()'
         result = deobfuscate(nested)
-        self.assertEqual(result.layers, 8)
+        self.assertEqual(result.layers, MAX_LAYERS)
         self.assertEqual(deobfuscate(result.source).source, 'print(1)')
 
     def test_unsupported_inputs_are_not_evaluated_or_partially_unwrapped(self):

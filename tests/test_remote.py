@@ -81,6 +81,39 @@ class UrlTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(url=path), self.assertRaises(DownloadError):
                 canonical_url(path)
 
+    def test_new_source_link_normalization(self):
+        cases = {
+            'https://github.com/a/b/blob/main/test.lua': 'https://raw.githubusercontent.com/a/b/main/test.lua',
+            'https://github.com/a/b/raw/main/test.lua?raw=1': 'https://raw.githubusercontent.com/a/b/main/test.lua',
+            'https://gitlab.com/group/sub/project/-/blob/main/a.lua': 'https://gitlab.com/group/sub/project/-/raw/main/a.lua',
+            'https://pastefy.app/Ab12Cd34': 'https://pastefy.app/Ab12Cd34/raw',
+            'https://pastefy.app/Ab12Cd34/raw': 'https://pastefy.app/Ab12Cd34/raw',
+            'https://cdn.jsdelivr.net/gh/a/b@main/a.lua': 'https://cdn.jsdelivr.net/gh/a/b@main/a.lua',
+        }
+        for url, target in cases.items():
+            self.assertEqual(canonical_url(url), target)
+        for url in ('https://github.com/a/b/blob/main/../secret',
+                    'https://github.com/a/b/blob/main/%2e%2e/secret',
+                    'https://github.com:443/a/b/blob/main/a.lua',
+                    'https://github.com/a/b/blob/main/a.lua?token=secret',
+                    'https://pastefy.app/abc/raw?x=y',
+                    'https://pastefy.app.evil/abc',
+                    'https://cdn.jsdelivr.net/npm/pkg/file',
+                    'https://cdn.jsdelivr.net/gh/a/b@main/../file',
+                    'https://evil@cdn.jsdelivr.net/gh/a/b@main/a.lua'):
+            with self.subTest(url=url), self.assertRaises(DownloadError):
+                canonical_url(url)
+
+    async def test_html_sniff_and_specific_http_errors(self):
+        cases = [(Response(status=404), '404'), (Response(status=403), 'denied'),
+                 (Response(status=429), 'rate limiting'),
+                 (Response(chunks=(b'<!DOCTYPE html><title>Challenge</title>',)), 'HTML'),
+                 (Response(chunks=(b'\xef\xbb\xbf<!DOCTYPE html>',)), 'HTML')]
+        for response, message in cases:
+            with patch('remote.aiohttp.ClientSession', return_value=Session(response)):
+                with self.assertRaisesRegex(DownloadError, message):
+                    await fetch_source(self.URL)
+
     async def test_pastebin_fetch_uses_raw_endpoint(self):
         session = Session(Response())
         with patch.object(session, 'get', wraps=session.get) as get:

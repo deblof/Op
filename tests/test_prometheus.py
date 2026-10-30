@@ -25,11 +25,8 @@ class DispatcherTests(unittest.TestCase):
             self.assertEqual((original.returncode, original.stdout), (0, b'b\n'))
             self.assertEqual((partial.returncode, partial.stdout), (original.returncode, original.stdout))
 
-    def test_rejects_unordered_bounds_and_multiline_or_oversized(self):
+    def test_rejects_unordered_bounds_and_oversized(self):
         self.assertIsNone(flatten_dispatcher(PROGRAM.replace('p<4', 'p<1')))
-        self.assertIsNone(flatten_dispatcher(PROGRAM + '\nprint(1)'))
-        self.assertIsNone(flatten_dispatcher(PROGRAM + '-- comment'))
-        self.assertIsNone(flatten_dispatcher('--[[long\ncomment]]\n' + PROGRAM))
         self.assertIsNone(flatten_dispatcher('x' * (MAX_SOURCE_BYTES + 1)))
 
     def test_leading_comments_and_trailing_newlines_are_preserved(self):
@@ -41,6 +38,19 @@ class DispatcherTests(unittest.TestCase):
         if shutil.which('lua5.1'):
             original = subprocess.run(['lua5.1', '-'], input=decorated.encode(), capture_output=True, timeout=3)
             partial = subprocess.run(['lua5.1', '-'], input=result[0].encode(), capture_output=True, timeout=3)
+            self.assertEqual((partial.returncode, partial.stdout), (original.returncode, original.stdout))
+
+    def test_multiline_unicode_and_comments_preserve_authored_behavior(self):
+        source = ('--[[comment with end/else\nUnicode é]]\n' + PROGRAM.replace(
+            'then r=', 'then -- leaf\n r=').replace('p=nil else', 'p=nil\nelse') + '\nprint("after")')
+        output, count = flatten_dispatcher(source)
+        self.assertEqual(count, 3)
+        self.assertIn('Unicode é', output)
+        self.assertIn('print("after")', output)
+        if shutil.which('lua5.1'):
+            original = subprocess.run(['lua5.1', '-'], input=source.encode(), capture_output=True, timeout=3)
+            partial = subprocess.run(['lua5.1', '-'], input=output.encode(), capture_output=True, timeout=3)
+            self.assertEqual((original.returncode, original.stdout), (0, b'b\nafter\n'))
             self.assertEqual((partial.returncode, partial.stdout), (original.returncode, original.stdout))
 
     def test_isolated_worker_detects_and_bounds(self):

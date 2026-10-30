@@ -8,6 +8,8 @@ from deobfuscator import MAX_BYTES
 
 # Exact interpreter fingerprint: opcode meanings are specific to this wrapper.
 _INTERPRETER_HASH = '855aa1c9b352c6595f9a121a52f858ea2e09d32a8fdbd85c96b5822bc57cf515'
+_INTERPRETER_TOKENS_HASH = 'b0b34bf068964bf2cf3cc68becc83d947fb3ae7f66efc79144650ee99a4a128f'
+
 _MARKER = 'return v15("LOL!'
 _SUFFIX = '",v9(),...);'
 _MAX_FUNCTIONS = 256
@@ -291,12 +293,26 @@ def render(root, reader):
     return VMReport('\n'.join(lines) + '\n', reader.functions, reader.instructions, reader.constants, truncated, len(recovered))
 
 
+def matches_interpreter(header):
+    """Accept exact known tokens, including harmless whitespace/comment changes."""
+    if hashlib.sha256(header.encode('utf-8')).hexdigest() == _INTERPRETER_HASH:
+        return True
+    if len(header.encode('utf-8')) > 64_000:
+        return False
+    from vendor.unprom.lexer import tokenize
+    try:
+        tokens = tuple((t.type, t.raw if t.raw is not None else t.value) for t in tokenize(header))
+        return hashlib.sha256(repr(tokens).encode()).hexdigest() == _INTERPRETER_TOKENS_HASH
+    except (SyntaxError, ValueError, RecursionError):
+        return False
+
+
 def inspect_vm(source: str) -> VMReport | None:
     """Return a partial report for the exact known interpreter, or None."""
     start = source.rfind(_MARKER)
     if start < 0 or len(source.encode('utf-8')) > MAX_BYTES:
         return None
-    if hashlib.sha256(source[:start].encode('utf-8')).hexdigest() != _INTERPRETER_HASH:
+    if not matches_interpreter(source[:start]):
         return None
     payload_start = start + len(_MARKER)
     end = source.find('"', payload_start)

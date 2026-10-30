@@ -1,44 +1,24 @@
-"""Reshape a narrowly recognized one-line VM dispatcher using source spans.
+"""Reshape a narrowly recognized VM dispatcher using source spans.
 
 This keeps VM transitions and leaf code intact. It does not reconstruct the
 original program, and output should be considered experimental.
 """
 
-import re
-
 from vendor.unprom import ast_nodes as A
 from vendor.unprom.astutil import as_int, unparen
-from vendor.unprom.lexer import tokenize
-from vendor.unprom.parser import Parser
 from vendor.unprom.vm import find_container
+from source_spans import SourceParser
 
 MAX_SOURCE_BYTES = 100_000
-
-
-class LocationParser(Parser):
-    def _block(self):
-        start = self.cur.col - 1
-        node = super()._block()
-        node.source_start = start
-        node.source_end = self.cur.col - 1
-        return node
 
 
 def flatten_dispatcher(source: str) -> tuple[str, int] | None:
     """Return a partial transformation, or None when the shape is unsupported."""
     if not (1000 <= len(source.encode('utf-8')) <= MAX_SOURCE_BYTES):
         return None
-    # Keep source offsets valid by parsing a single-line body. Preserve simple
-    # leading comment/blank lines and trailing newlines exactly. Long comments
-    # and any comments in the body remain unsupported.
-    prefix_match = re.match(r'(?:[ \t]*\r?\n|[ \t]*--(?!\[=*\[)[^\r\n]*(?:\r?\n|$))*', source)
-    prefix = prefix_match.group()
-    body = source[len(prefix):]
-    code = body.rstrip('\r\n')
-    suffix = body[len(code):]
-    if '\n' in code or '\r' in code or '--' in code:
-        return None
-    chunk = LocationParser(tokenize(code)).parse_chunk()
+    # Absolute offsets also work with comments, Unicode and multiline bodies.
+    code = source
+    chunk = SourceParser(code).parse_chunk()
     container = find_container(chunk)
     if container is None or len(container.container_fn.params) != 4 or not container.ret_name:
         return None
@@ -73,7 +53,7 @@ def flatten_dispatcher(source: str) -> tuple[str, int] | None:
         parts.append(code[leaf.source_start:leaf.source_end])
         parts.append(' ')
     parts.append('\nend ')
-    output = prefix + code[:root.source_start] + ''.join(parts) + code[root.source_end:] + suffix
+    output = code[:root.source_start] + ''.join(parts) + code[root.source_end:]
     if len(output.encode('utf-8')) > MAX_SOURCE_BYTES * 2:
         return None
     return output, len(leaves)

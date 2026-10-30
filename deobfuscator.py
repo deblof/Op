@@ -7,14 +7,15 @@ import re
 
 MAX_BYTES = 1_000_000
 MAX_INPUT_BYTES = 2_000_000
-MAX_LAYERS = 8
+MAX_LAYERS = 32
 MAX_NESTING = 64
+LONG_BRACKET = re.compile(r'\[(=*)\[')
 NUMBER = re.compile(r'(?:0[xX][0-9a-fA-F]+|[0-9]+)')
 IDENTIFIER = re.compile(r'[A-Za-z_][A-Za-z_0-9]*')
 MAX_LOCALS = 128
 MAX_TOTAL_LOCAL_BYTES = 2 * MAX_BYTES
 RESERVED = set('and break do else elseif end false for function goto if in local nil not or repeat return then true until while'.split())
-PROTECTED = {'string', 'table', 'base64', 'base64_decode', 'base64decode', 'hex', 'hex_decode', 'hexdecode', 'bit', 'bit32', 'crypt', 'syn', 'load', 'loadstring'}
+PROTECTED = {'string', 'table', 'base64', 'base64_decode', 'base64decode', 'hex', 'hex_decode', 'hexdecode', 'bit', 'bit32', 'crypt', 'syn', 'load', 'loadstring', 'game', 'unpack'}
 
 
 class Unsupported(ValueError):
@@ -34,8 +35,23 @@ class Parser:
         self.locals = {}
 
     def space(self):
-        while self.pos < len(self.source) and self.source[self.pos] in ' \t\r\n\f\v':
-            self.pos += 1
+        while self.pos < len(self.source):
+            if self.source[self.pos] in ' \t\r\n\f\v':
+                self.pos += 1
+            elif self.source.startswith('--', self.pos):
+                start = self.pos + 2
+                bracket = LONG_BRACKET.match(self.source, start)
+                if bracket:
+                    close = ']' + bracket.group(1) + ']'
+                    end = self.source.find(close, start + len(bracket.group()))
+                    if end < 0:
+                        raise Unsupported()
+                    self.pos = end + len(close)
+                else:
+                    end = self.source.find('\n', start)
+                    self.pos = len(self.source) if end < 0 else end + 1
+            else:
+                break
 
     def take(self, value: str) -> bool:
         self.space()
@@ -79,6 +95,32 @@ class Parser:
         self.pos = match.end()
         return int(raw, 16 if raw.lower().startswith('0x') else 10)
 
+    def number_atom(self, depth):
+        if depth > MAX_NESTING:
+            raise Unsupported()
+        if self.take('('):
+            value = self.number_value(depth + 1)
+            self.require(')')
+            return value
+        if self.take('-'):
+            return -self.number_atom(depth + 1)
+        return self.integer()
+
+    def number_value(self, depth=0):
+        value = self.number_atom(depth + 1)
+        while True:
+            if self.take('+'):
+                value += self.number_atom(depth + 1)
+            elif self.take('-'):
+                value -= self.number_atom(depth + 1)
+            else:
+                break
+            if abs(value) > 2 ** 31:
+                raise Unsupported()
+        if abs(value) > 2 ** 31:
+            raise Unsupported()
+        return value
+
     def byte_value(self, depth: int) -> int:
         if depth > MAX_NESTING:
             raise Unsupported()
@@ -89,8 +131,8 @@ class Parser:
                 value ^= self.byte_value(depth + 1)
             self.require(')')
             return value
-        number = self.integer()
-        if number > 255:
+        number = self.number_value(depth + 1)
+        if not 0 <= number <= 255:
             raise Unsupported()
         return number
 
@@ -105,7 +147,24 @@ class Parser:
         if self.keyword('string.char'):
             self.require('(')
             values = bytearray()
-            if not self.take(')'):
+            unpacked = self.keyword('table.unpack') or self.keyword('unpack')
+            if unpacked:
+                self.require('(')
+                self.require('{')
+                if not self.take('}'):
+                    while True:
+                        values.append(self.byte_value(depth + 1))
+                        if len(values) > MAX_BYTES:
+                            raise Unsupported()
+                        if self.take('}'):
+                            break
+                        if not self.take(',') and not self.take(';'):
+                            raise Unsupported()
+                        if self.take('}'):
+                            break
+                self.require(')')
+                self.require(')')
+            elif not self.take(')'):
                 while True:
                     number = self.byte_value(depth + 1)
                     if len(values) >= MAX_BYTES:
@@ -115,6 +174,19 @@ class Parser:
                         break
                     self.require(',')
             return bytes(values)
+        if self.keyword('string.sub'):
+            self.require('(')
+            value = self.expression(depth + 1)
+            self.require(',')
+            start = self.number_value(depth + 1)
+            stop = -1
+            if self.take(','):
+                stop = self.number_value(depth + 1)
+            self.require(')')
+            length = len(value)
+            start = start if start >= 0 else length + start + 1
+            stop = stop if stop >= 0 else length + stop + 1
+            return value[max(1, start) - 1:max(0, min(length, stop))]
         if self.keyword('string.reverse'):
             self.require('(')
             value = self.expression(depth + 1)
@@ -147,7 +219,8 @@ class Parser:
                     values.append(value)
                     if self.take('}'):
                         break
-                    self.require(',')
+                    if not self.take(',') and not self.take(';'):
+                        raise Unsupported()
                     if self.take('}'):
                         break
             separator = b''
@@ -186,7 +259,7 @@ class Parser:
 
     def string(self) -> bytes:
         self.space()
-        match = re.match(r'\[(=*)\[', self.source[self.pos:])
+        match = LONG_BRACKET.match(self.source, self.pos)
         if match:
             start = self.pos + len(match.group())
             end = self.source.find(']' + match.group(1) + ']', start)
@@ -230,7 +303,8 @@ class Parser:
                     self.pos += 1
                 value.append(10)
             elif char == 'z':
-                self.space()
+                while self.pos < len(self.source) and self.source[self.pos] in ' \t\r\n\f\v':
+                    self.pos += 1
             elif char == 'x':
                 digits = self.source[self.pos:self.pos + 2]
                 if not re.fullmatch(r'[0-9a-fA-F]{2}', digits):
@@ -250,8 +324,7 @@ class Parser:
         raise Unsupported()
 
 
-def unwrap(source: str) -> str:
-    parser = Parser(source)
+def read_locals(parser):
     total_local_bytes = 0
     while parser.keyword('local'):
         parser.space()
@@ -269,6 +342,11 @@ def unwrap(source: str) -> str:
             raise Unsupported()
         parser.locals[name] = value
         parser.take(';')
+    return parser
+
+
+def unwrap(source: str) -> str:
+    parser = read_locals(Parser(source))
     parser.keyword('return')
     if not (parser.keyword('loadstring') or parser.keyword('load')):
         raise Unsupported()
@@ -314,6 +392,7 @@ def remote_url(source: str) -> str | None:
         return source
     parser = Parser(source)
     try:
+        read_locals(parser)
         parser.keyword('return')
         if not (parser.keyword('loadstring') or parser.keyword('load')):
             return None

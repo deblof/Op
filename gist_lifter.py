@@ -1,11 +1,10 @@
 """Specialize the fingerprinted Gist VM to explicit Lua, without running it."""
-import hashlib
 import math
 from vendor.unprom import ast_nodes as A
 from vendor.unprom.parser import Parser
 from vendor.unprom.lexer import tokenize
 from vendor.unprom.astutil import unparen
-from vm_inspector import Reader, unpack_payload, _MARKER, _SUFFIX, _INTERPRETER_HASH, recover_strings
+from vm_inspector import Reader, unpack_payload, _MARKER, _SUFFIX, recover_strings, matches_interpreter
 from lua_values import literal
 from lua_ast_source import block, expr
 from lua_cfg import Step, render, indent
@@ -217,7 +216,7 @@ def translate(root,header):
 
 def lift(source):
     start=source.rfind(_MARKER)
-    if start<0 or hashlib.sha256(source[:start].encode()).hexdigest()!=_INTERPRETER_HASH: return None
+    if start<0 or not matches_interpreter(source[:start]): return None
     end=source.find('"',start+len(_MARKER))
     if end<0 or source[end:]!=_SUFFIX: return None
     reader=Reader(unpack_payload(source[start+len(_MARKER):end]))

@@ -14,7 +14,7 @@ def interaction():
 
 class CommandTests(unittest.IsolatedAsyncioTestCase):
     def test_registered_commands(self):
-        self.assertEqual({c.name for c in bot.tree.get_commands()}, {'help', 'deblof'})
+        self.assertEqual({c.name for c in bot.tree.get_commands()}, {'help', 'deblof', 'strings', 'analyze', 'format'})
 
     async def test_help_is_private(self):
         ctx = interaction()
@@ -61,7 +61,7 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
         from remote import DownloadError
         ctx = interaction()
         with patch('bot.fetch_source', new=AsyncMock(side_effect=DownloadError('Not allowed'))):
-            await deblof.callback(ctx, source='https://example.com/x.lua')
+            await deblof.callback(ctx, source='https://raw.githubusercontent.com/a/b/main/x.lua')
         self.assertEqual(ctx.followup.send.await_args.args[0], 'Not allowed')
         self.assertTrue(ctx.followup.send.await_args.kwargs['ephemeral'])
 
@@ -115,7 +115,7 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
         url = 'https://pastebin.com/Ab12Cd34'
         with patch('bot.fetch_source', AsyncMock(return_value='loadstring("print(1)")()')) as fetch:
             await deblof.callback(ctx, source=f'loadstring(game:HttpGet("{url}"))()')
-        fetch.assert_awaited_once_with(url)
+        fetch.assert_awaited_once_with('https://pastebin.com/raw/Ab12Cd34')
         self.assertEqual(ctx.followup.send.await_args.kwargs['file'].fp.read(), b'print(1)')
 
     async def test_aryq_table_is_reported_as_partial(self):
@@ -124,7 +124,7 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
         await deblof.callback(ctx, source=SAMPLE)
         self.assertIn('Partially decoded 2', ctx.followup.send.await_args.args[0])
         self.assertIn('not been reconstructed', ctx.followup.send.await_args.args[0])
-        self.assertEqual(ctx.followup.send.await_args.kwargs['file'].filename, 'partially-decoded.lua')
+        self.assertEqual([f.filename for f in ctx.followup.send.await_args.kwargs['files']], ['partially-decoded.lua', 'original.lua'])
 
     async def test_unhandled_luraph_header_is_not_claimed_as_decoded(self):
         ctx = interaction()
@@ -155,6 +155,49 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
         await deblof.callback(ctx, source='print(1)')
         self.assertIn('No supported', ctx.followup.send.await_args.args[0])
         self.assertTrue(ctx.followup.send.await_args.kwargs['ephemeral'])
+
+    async def test_diagnostic_commands_are_private_and_keep_original(self):
+        from bot import strings_command, analyze_command, format_command
+        for command in (strings_command, analyze_command, format_command):
+            ctx = interaction()
+            await command.callback(ctx, source='print("\\065", (2+3))')
+            args = ctx.followup.send.await_args
+            self.assertTrue(args.kwargs['ephemeral'])
+            if command is format_command:
+                self.assertEqual([f.filename for f in args.kwargs['files']], ['formatted.lua', 'original.lua'])
+                self.assertEqual(args.kwargs['files'][1].fp.read(), b'print("\\065", (2+3))')
+            else:
+                report = args.kwargs['file'].fp.read().decode()
+                self.assertIn('"A"', report)
+                if command is analyze_command:
+                    self.assertIn('SHA-256:', report)
+
+    async def test_unknown_vm_gets_literal_cleanup_without_success_claim(self):
+        ctx = interaction()
+        await deblof.callback(ctx, source='unknown_vm("\\104\\105", (10+2))')
+        args = ctx.followup.send.await_args
+        self.assertIn('Partial static cleanup', args.args[0])
+        self.assertIn('has not been reconstructed', args.args[0])
+        self.assertEqual([f.filename for f in args.kwargs['files']], ['partially-decoded.lua', 'original.lua', 'strings.txt'])
+
+    async def test_busy_request_does_not_block_help_or_start_second_analysis(self):
+        import asyncio
+        started, release = asyncio.Event(), asyncio.Event()
+        async def read():
+            started.set()
+            await release.wait()
+            return b'loadstring("print(1)")()'
+        first, second, help_ctx = interaction(), interaction(), interaction()
+        task = asyncio.create_task(deblof.callback(first, file=SimpleNamespace(size=25, read=read)))
+        await started.wait()
+        try:
+            await deblof.callback(second, source='print(1)')
+            self.assertIn('another request', second.response.send_message.await_args.args[0])
+            await help_command.callback(help_ctx)
+            self.assertTrue(help_ctx.response.send_message.await_args.kwargs['ephemeral'])
+        finally:
+            release.set()
+            await task
 
     async def test_invalid_arguments_and_file(self):
         for args in ({}, {'source': 'x', 'file': SimpleNamespace(size=1)},
