@@ -4,6 +4,8 @@ This keeps VM transitions and leaf code intact. It does not reconstruct the
 original program, and output should be considered experimental.
 """
 
+import re
+
 from vendor.unprom import ast_nodes as A
 from vendor.unprom.astutil import as_int, unparen
 from vendor.unprom.lexer import tokenize
@@ -26,11 +28,17 @@ def flatten_dispatcher(source: str) -> tuple[str, int] | None:
     """Return a partial transformation, or None when the shape is unsupported."""
     if not (1000 <= len(source.encode('utf-8')) <= MAX_SOURCE_BYTES):
         return None
-    # Lexer columns are source offsets only for a single line. Also reject all
-    # comments conservatively, including '--' inside strings.
-    if '\n' in source or '\r' in source or '--' in source:
+    # Keep source offsets valid by parsing a single-line body. Preserve simple
+    # leading comment/blank lines and trailing newlines exactly. Long comments
+    # and any comments in the body remain unsupported.
+    prefix_match = re.match(r'(?:[ \t]*\r?\n|[ \t]*--(?!\[=*\[)[^\r\n]*(?:\r?\n|$))*', source)
+    prefix = prefix_match.group()
+    body = source[len(prefix):]
+    code = body.rstrip('\r\n')
+    suffix = body[len(code):]
+    if '\n' in code or '\r' in code or '--' in code:
         return None
-    chunk = LocationParser(tokenize(source)).parse_chunk()
+    chunk = LocationParser(tokenize(code)).parse_chunk()
     container = find_container(chunk)
     if container is None or len(container.container_fn.params) != 4 or not container.ret_name:
         return None
@@ -58,14 +66,14 @@ def flatten_dispatcher(source: str) -> tuple[str, int] | None:
     parts = []
     for i, leaf in enumerate(leaves):
         if i < len(limits):
-            parts.append(('if ' if i == 0 else ' elseif ') + container.pos_name
-                         + ' < ' + str(limits[i]) + ' then ')
+            parts.append(('if ' if i == 0 else '\nelseif ') + container.pos_name
+                         + ' < ' + str(limits[i]) + ' then\n    ')
         else:
-            parts.append(' else ')
-        parts.append(source[leaf.source_start:leaf.source_end])
+            parts.append('\nelse\n    ')
+        parts.append(code[leaf.source_start:leaf.source_end])
         parts.append(' ')
-    parts.append('end ')
-    output = source[:root.source_start] + ''.join(parts) + source[root.source_end:]
+    parts.append('\nend ')
+    output = prefix + code[:root.source_start] + ''.join(parts) + code[root.source_end:] + suffix
     if len(output.encode('utf-8')) > MAX_SOURCE_BYTES * 2:
         return None
     return output, len(leaves)

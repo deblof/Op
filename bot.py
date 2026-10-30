@@ -165,11 +165,12 @@ async def deblof(interaction: discord.Interaction, file: discord.Attachment | No
     if analysis and analysis.kind == 'unsupported':
         message += (f' The header says {analysis.label}; this is not proof of its format. '
                     'No decoder for that VM is available, so the source remains obfuscated.')
-    elif fetched and not decoded_layers:
-        message += ' No supported wrapper was decoded; the downloaded source may still be obfuscated.'
+    elif fetched and not result.layers:
+        message += ' No supported wrapper was decoded from the downloaded file; it is returned unchanged and may still be obfuscated.'
     if reached_limit:
         message += ' The 8-layer limit was reached; submit the output again to continue.'
-    await interaction.followup.send(message, file=discord.File(io.BytesIO(result.source.encode('utf-8')), filename='deblofed.lua'), ephemeral=True)
+    filename = 'original.lua' if fetched and not result.layers else 'deblofed.lua'
+    await interaction.followup.send(message, file=discord.File(io.BytesIO(result.source.encode('utf-8')), filename=filename), ephemeral=True)
 
 
 @deblof.error

@@ -18,7 +18,7 @@ class DispatcherTests(unittest.TestCase):
         output, count = flatten_dispatcher(PROGRAM)
         self.assertEqual(count, 3)
         self.assertIn('elseif p < 4 then', output)
-        self.assertNotIn('\n', output)
+        self.assertIn('\nelseif p < 4 then\n', output)
         if shutil.which('lua5.1'):
             original = subprocess.run(['lua5.1', '-'], input=PROGRAM.encode(), capture_output=True, timeout=3)
             partial = subprocess.run(['lua5.1', '-'], input=output.encode(), capture_output=True, timeout=3)
@@ -27,9 +27,21 @@ class DispatcherTests(unittest.TestCase):
 
     def test_rejects_unordered_bounds_and_multiline_or_oversized(self):
         self.assertIsNone(flatten_dispatcher(PROGRAM.replace('p<4', 'p<1')))
-        self.assertIsNone(flatten_dispatcher(PROGRAM + '\n'))
+        self.assertIsNone(flatten_dispatcher(PROGRAM + '\nprint(1)'))
         self.assertIsNone(flatten_dispatcher(PROGRAM + '-- comment'))
+        self.assertIsNone(flatten_dispatcher('--[[long\ncomment]]\n' + PROGRAM))
         self.assertIsNone(flatten_dispatcher('x' * (MAX_SOURCE_BYTES + 1)))
+
+    def test_leading_comments_and_trailing_newlines_are_preserved(self):
+        decorated = '-- first comment\n  -- second comment\r\n\n' + PROGRAM + '\r\n'
+        expected, _ = flatten_dispatcher(PROGRAM)
+        result = analyze_dispatcher(decorated)
+        self.assertIsNotNone(result)
+        self.assertEqual(result, ('-- first comment\n  -- second comment\r\n\n' + expected + '\r\n', 3))
+        if shutil.which('lua5.1'):
+            original = subprocess.run(['lua5.1', '-'], input=decorated.encode(), capture_output=True, timeout=3)
+            partial = subprocess.run(['lua5.1', '-'], input=result[0].encode(), capture_output=True, timeout=3)
+            self.assertEqual((partial.returncode, partial.stdout), (original.returncode, original.stdout))
 
     def test_isolated_worker_detects_and_bounds(self):
         result = analyze_dispatcher(PROGRAM)

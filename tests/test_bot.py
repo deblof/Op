@@ -46,6 +46,17 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.followup.send.await_args.kwargs['file'].fp.read(), b'print(1)')
         self.assertIn('Downloaded public source', ctx.followup.send.await_args.args[0])
 
+    async def test_unrecognized_remote_source_is_labeled_original(self):
+        ctx = interaction()
+        source = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/a/b/c/d.lua"))()'
+        with patch('bot.fetch_source', new=AsyncMock(return_value='return unknown_vm()')):
+            await deblof.callback(ctx, source=source)
+        args = ctx.followup.send.await_args
+        self.assertIn('returned unchanged', args.args[0])
+        self.assertEqual(args.kwargs['file'].filename, 'original.lua')
+        self.assertEqual(args.kwargs['file'].fp.read(), b'return unknown_vm()')
+        self.assertTrue(args.kwargs['ephemeral'])
+
     async def test_remote_download_error_is_private(self):
         from remote import DownloadError
         ctx = interaction()

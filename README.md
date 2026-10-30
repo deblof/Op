@@ -38,7 +38,7 @@ Provide a direct link or a whole-script Roblox `loadstring(game:HttpGet("..."))(
 - `gitlab.com/<group>/<project>/-/raw/<ref>/<path>`, optionally with `ref_type=heads`.
 - `pastebin.com/<id>` and `pastebin.com/raw/<id>`. Page links and `www.pastebin.com` links are normalized to `https://pastebin.com/raw/<id>` before downloading.
 
-Only public source is supported. Private, removed, login or challenge pages can fail. Credentials, explicit ports, fragments and redirects are rejected. Downloads require UTF-8, are limited to 2 MB, and have a 15-second timeout. HTML pages and compressed responses are rejected. One link is fetched per request; nested remote loaders are not recursively downloaded. A five-second per-user cooldown and a three-download concurrency limit apply.
+Only public source is supported. Private, removed, login or challenge pages can fail. Credentials, explicit ports, fragments and redirects are rejected. Downloads require UTF-8, are limited to 2 MB, and have a 15-second timeout. HTML pages and compressed responses are rejected. One link is fetched per request; nested remote loaders are not recursively downloaded. If no supported transformation applies, the downloaded file is returned unchanged as `original.lua`. A five-second per-user cooldown and a three-download concurrency limit apply.
 
 ## Recognized VM translation
 
@@ -48,7 +48,7 @@ This is mechanically recovered Lua, with register values stored in a `values` ta
 
 The Aryq decoder matches one complete script fingerprint and assumes its anti-tamper value is zero in an ordinary runtime. Other versions and changed key conditions are unsupported. Its translated functions include its original entry helper functions, formatted for reading. No user-submitted Lua is executed by the bot. Local Luau tools are used during development only to compile submitted output and to execute harmless, independently authored test programs.
 
-Translation has bounds on input, instruction and function counts, graph structuring, and output (8 MB). Concurrent translations are bounded per format. If translation cannot finish safely, the existing partial report is returned where possible. Some recognizable byte-addition tables can be folded, and an experimental static pass can simplify certain Prometheus-style dispatchers up to 100 KB. These partial outputs retain obfuscation and may behave differently. Luraph headers are hints only; no Luraph decoder is included.
+Translation has bounds on input, instruction and function counts, graph structuring, and output (8 MB). Concurrent translations are bounded per format. If translation cannot finish safely, the existing partial report is returned where possible. Some recognizable byte-addition tables can be folded, and an experimental static pass can simplify certain single-line Prometheus-style dispatchers up to 100 KB, including files with leading line comments; its output separates dispatcher branches onto lines. These partial outputs retain obfuscation and may behave differently. Luraph headers are hints only; no Luraph decoder is included.
 
 Arbitrary VM formats, arbitrary Lua evaluation and private source downloads remain unsupported. Decoded or translated output can still contain dangerous code; review it before running it.
 
